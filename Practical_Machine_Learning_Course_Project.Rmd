@@ -1,0 +1,184 @@
+---
+title: "Classification of exercise type by Multinomial Logistic Regression and Random Forest with WLE Dataset"
+output: html_document
+date: "2023-12-12"
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis
+
+In this report, we tried to build model to classify the type of exercise. The exericise is barbell lift, type of it was divided into 5 class.(1 correctly and 4 incorrectly) For this, we used 'Weight Lift Exercise Dataset'(http://groupware.les.inf.puc-rio.br/har) that contains quantified figures from accelerometers on the belt, forearm, arm, and dumbell of 6 participants in addition to the class of exercise. As our classification models, we used Multinomial Logistic Regression with PCA and Random Forest and compared them. Among them, we use Random Forest model that has higher accuracy to predict test set. The Accuracy about test set was 0.9949. 
+
+
+## Split data into Training/Test set
+
+```{r, echo=FALSE, message=FALSE}
+library(caret)
+library(ggplot2)
+library(nnet)
+library(randomForest)
+
+data <- read.csv('pml-training.csv')
+dim(data)
+```
+
+Our data has 19622 observations and 160 variables, and we split it into 80:20(Training:Test).
+So training and test set has 15699, 3923 observation each.
+
+
+
+## Exploratory Data Analysis
+
+Let's take a look at our training data. As i said before, training data has 15699 observation and 160 variables. Some of our data are as follows.
+```{r, echo=FALSE}
+head(data, 3)
+```
+
+160 Variables contain quantified figures from accelerometers on the belt, forearm, arm, and dumbell of 6 participants, and each rows have specific class of exercies(A, B, C, D, E).
+So our goal is predict the class of exercise using the other variables from accelerometer.
+Because our data is too massive to explore the relationship between response and explanatory variables, we will try 2 classification model. First is Multinomial Logistic Regression, but it requires multicollinearity, we will use it with PCA that meet the assumption. The other is Random Forest.
+
+
+## Preprocessing
+
+To apply 2 models, we need to preprocess our data.
+The preprocessings we will do are following.
+
+1. remove columns that contain NA value or blank value
+2. remove another variables that is unnecessary for prediction(time-related columns, user-name, X columns)
+
+Now training set after preprocessing has 15699 observations with 53 variables.
+With this preprocessed data we will fit two classification models.
+
+```{r, echo=FALSE, results='hide'}
+#preprocessing
+#1. remove columns that contain NA value or blank value
+columns <- c()
+num <- 1
+for(i in 1:160){
+  if(sum(is.na(data[,i]))>=1 | sum(data[,i]=="")>=1){
+    columns[num] <- i
+    num <- num + 1
+  }
+}
+
+new_data <- data[,-columns]
+
+#2. remove another variables that is unnecessary for prediction
+#(time-related columns, user-name, X columns)
+
+new_data <- new_data[,-c(1:7)]
+
+#randomly arrange row
+set.seed(1)
+sample <- sample(1:19622)
+new_data <- new_data[sample,]
+new_data$classe <- as.factor(new_data$classe)
+
+#split data into training/test/validation set(80/20)
+inTrain <- createDataPartition(new_data$classe, p=0.8, list=FALSE)
+training <- new_data[inTrain,]
+testing <- new_data[-inTrain,]
+```
+
+```{r, echo=FALSE}
+dim(training)
+```
+
+## Multinomial Logistic Regression model with PCA
+
+Multinomial Logistic Regression is a extended method of Logistic Regression to solve multi-class classification problem. It requires the 'multicollinearity' condition between explanatory variables.
+
+Although we have large dataset, we will do cross-validation to get more generalized error.
+As the method of cross-validation, we will use '5-fold cross validation.'
+First, let's fit a Multinomial Logistic Regression model. To meet the multicollinearity assumption of this model, we will do additional preprocession 'PCA'.
+
+```{r, echo=FALSE, results='hide', cache=TRUE}
+#cross-validation of PCA + MLR
+set.seed(123)
+cv <- createFolds(training$classe, k=5)
+accuracy1 <- c()
+num1 <- 1
+
+for(i in 1:length(cv)){
+  index <- cv[[i]]
+  
+  cv_valid <- training[index,]
+  cv_train <- training[-index,]
+  
+  set.seed(234)
+  prepro <- preProcess(cv_train[,-53], method='pca', thresh=0.9)
+  cv_train_PC <- predict(prepro, cv_train[,-53])
+  
+  model <- multinom(cv_train$classe ~ ., data=cv_train_PC)
+  
+  cv_valid_PC <- predict(prepro, cv_valid[,-53])
+  pred <- predict(model, cv_valid_PC)
+  
+  accuracy1[num1] <- sum(pred == cv_valid[,53])/dim(cv_valid)[1]
+  num1 <- num1 + 1
+  
+}
+```
+
+```{r, echo=FALSE}
+prepro
+```
+
+As result of PCA, we will use 20 components that capture 90 percent variance of data and are 33 less than 53 variables of data before. And 20 components are orthogonal with each others, The assumption of multicollinearity is meeted.
+
+
+Mean accuracy of this model from cross-validation is '0.5024524', it worked not so well.
+```{r, echo=FALSE}
+ave_accuracy_MLR <- mean(accuracy1)
+ave_accuracy_MLR
+```
+
+## Random Forest
+
+This time, Let's fit the Random Forest model. Also we will do '5-fold cross-validation' and get the mean accuracy.
+
+```{r, echo=FALSE, cache=TRUE}
+#cross validation of randomforest
+accuracy2 <- c()
+num2 <- 1
+
+for(i in 1:length(cv)){
+  index <- cv[[i]]
+  
+  cv_valid <- training[index,]
+  cv_train <- training[-index,]
+  
+  set.seed(345)
+  model_rf <- randomForest(classe ~ ., data=cv_train)
+  pred2 <- predict(model_rf, cv_valid)
+  
+  accuracy2[num2] <- sum(pred2 == cv_valid[,53])/dim(cv_valid)[1]
+  num2 <- num2 + 1
+  
+}
+
+ave_accuracy_RF <- mean(accuracy2)
+```
+
+Mean accuracy of random forest is '0.9941399', pretty high!
+But, it is possible that this random forest model is overfitted to training data set, we need to check our model to test set.
+
+```{r, echo=FALSE}
+ave_accuracy_RF
+```
+
+## Prediction and Evaluation about test set.
+
+Test set has 3923 observations. So Let's apply out random forest model to it!
+```{r, echo=FALSE}
+pred3 <- predict(model_rf, testing)
+confusionMatrix(pred3, testing$classe)
+```
+
+It worked well with test set too!
+
+
